@@ -5,25 +5,24 @@ import os
 import time
 import json
 
-# Initialize SQS client globally
 sqs = boto3.client("sqs")
 
 @task
 def populate_queue():
-    """Posts to the scatter API to populate the SQS queue and returns the queue URL."""
+    # posts to the scatter API to populate the sqs queue
     logger = get_run_logger()
-    UVA_ID = "uup3cy" # Hard-coded
+    UVA_ID = "uup3cy" 
     try:
-        url = f"https://j9y2xa0vx0.execute-api.us-east-1.amazonaws.com/api/scatter/{UVA_ID}"
-        response = requests.post(url)
-        response.raise_for_status() # Raise an exception for bad status codes
+        url = "https://j9y2xa0vx0.execute-api.us-east-1.amazonaws.com/api/scatter/uup3cy"
+        response = requests.post(url) # post request to populate queue with messages
+        response.raise_for_status() 
         payload = response.json()
         queue_url = payload["sqs_url"]
 
         logger.info(f"Queue populated successfully")
         logger.info(f"SQS URL: {queue_url}")
         
-        # Get and log queue attributes
+        # get and log queue attributes
         attrs = sqs.get_queue_attributes(QueueUrl=queue_url, AttributeNames=["All"])
         logger.debug(f"Queue attributes: {attrs}")
         
@@ -37,17 +36,13 @@ def populate_queue():
 
 @task
 def process_queue(queue_url: str):
-    """
-    Polls the SQS queue, collects order_no and word attributes from messages,
-    deletes the messages, and returns the collected data.
-    """
+
     logger = get_run_logger()
     collected = []
-    # Using the global sqs client initialized at the top
 
     while True:
         try:
-            # --- Monitor the queue ---
+            # monitor the queue
             attrs = sqs.get_queue_attributes(
                 QueueUrl=queue_url,
                 AttributeNames=[
@@ -57,7 +52,7 @@ def process_queue(queue_url: str):
                 ]
             )
 
-            # Extract counts
+            # extract counts
             attributes = attrs.get("Attributes", {})
             visible = int(attributes.get("ApproximateNumberOfMessages", 0))
             not_visible = int(attributes.get("ApproximateNumberOfMessagesNotVisible", 0))
@@ -71,7 +66,7 @@ def process_queue(queue_url: str):
                 logger.info("No messages left in the queue. Done collecting.")
                 break
 
-            # --- Try to receive messages ---
+            # receive messages
             response = sqs.receive_message(
                 QueueUrl=queue_url,
                 MaxNumberOfMessages=10, 
@@ -85,7 +80,7 @@ def process_queue(queue_url: str):
                 time.sleep(10)
                 continue
 
-            # --- Process and delete messages ---
+            # process messages
             delete_entries = []
             for msg in messages:
                 attrs = msg.get("MessageAttributes", {})
@@ -106,7 +101,7 @@ def process_queue(queue_url: str):
                 })
 
             if delete_entries:
-                # Batch delete messages
+                # delete the messages after bringing them in 
                 sqs.delete_message_batch(
                     QueueUrl=queue_url,
                     Entries=delete_entries
@@ -140,10 +135,10 @@ def order_messages(collected: list, destination_url: str = None):
                     pass
             normalized.append((key, order_no, word))
 
-        # Sort: None (non-numeric) at the end, numeric by key
+        # sort the messages based on their order number
         normalized.sort(key=lambda x: (x[0] is None, x[0] if x[0] is not None else 0))
 
-        # Build ordered list of words
+        # build ordered list of words
         ordered_words = [w for _, _, w in normalized]
         ordered_text = " ".join(ordered_words)
         logger.info(f"Ordered text: {ordered_text}")
@@ -158,7 +153,7 @@ def submit_solution(phrase: str):
     """Submits the final phrase to the submission SQS queue."""
     submission_url = "https://sqs.us-east-1.amazonaws.com/440848399208/dp2-submit"
     platform = "prefect"
-    UVA_ID = "uup3cy" # Hard-coded
+    UVA_ID = "uup3cy" 
     logger = get_run_logger()
     
     try:
@@ -168,7 +163,7 @@ def submit_solution(phrase: str):
             MessageAttributes={
                 'uvaid': {
                     'DataType': 'String',
-                    'StringValue': UVA_ID # Hard-coded
+                    'StringValue': UVA_ID 
                 },
                 'phrase': {
                     'DataType': 'String',
@@ -187,7 +182,7 @@ def submit_solution(phrase: str):
         logger.error(f"Error submitting solution to SQS: {e}")
         return False
 
-@flow(log_prints=True)
+@flow(log_prints=True) # initializes the prefect flow, bringing all task functions together 
 def puzzle_solver_flow(submit_answer: bool = True):
     """Orchestrates the process of populating, processing, ordering, and submitting the puzzle."""
     
@@ -197,5 +192,5 @@ def puzzle_solver_flow(submit_answer: bool = True):
     if submit_answer:
         submit_solution(ordered_text)
 
-if __name__ == "__main__":
+if __name__ == "__main__": # prepares the flow to run as a script
     puzzle_solver_flow(submit_answer=True)

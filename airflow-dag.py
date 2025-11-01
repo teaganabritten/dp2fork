@@ -24,22 +24,22 @@ default_args = {
     "retry_delay": timedelta(minutes=1),
 }
 
-@dag(
-    dag_id="puzzle_solver_dag",
+@dag( # defining the conditions for the DAG
+    dag_id="dp2_airflow_dag",
     default_args=default_args,
-    description="Airflow version of Prefect puzzle solver flow",
+    description="Airflow DAG to Rearrange Quote",
     schedule=None,
     start_date=datetime(2025, 10, 31),
     catchup=False,
-    tags=["puzzle", "sqs", "uva"],
+    tags=["dp2", "quote", "sqs"],
 )
-def dp2_airflow_dag():
+def dp2_dag():
 
     logger = LoggingMixin().log
 
     @task
     def populate_queue():
-        """Posts to the scatter API to populate the SQS queue and returns the queue URL."""
+        # Post to API to populate queue with messages
         try:
             url = f"https://j9y2xa0vx0.execute-api.us-east-1.amazonaws.com/api/scatter/uup3cy"
             response = requests.post(url)
@@ -57,8 +57,8 @@ def dp2_airflow_dag():
             raise
 
     @task
-    def process_queue(queue_url: str):
-        """Polls the SQS queue, collects order_no and word attributes, deletes the messages."""
+    def process_queue(queue_url: str): 
+        # checks the queue for messages to load and brings them in
         collected = []
 
         while True:
@@ -71,7 +71,7 @@ def dp2_airflow_dag():
                         "ApproximateNumberOfMessagesDelayed"
                     ]
                 )
-
+                # Getting the message attributes and the number of messages available etc. 
                 attributes = attrs.get("Attributes", {})
                 visible = int(attributes.get("ApproximateNumberOfMessages", 0))
                 not_visible = int(attributes.get("ApproximateNumberOfMessagesNotVisible", 0))
@@ -84,7 +84,7 @@ def dp2_airflow_dag():
                     logger.info("Queue empty, done collecting.")
                     break
 
-                response = sqs.receive_message(
+                response = sqs.receive_message( # establishing parameters to receive messages
                     QueueUrl=queue_url,
                     MaxNumberOfMessages=10,
                     WaitTimeSeconds=5,
@@ -92,12 +92,12 @@ def dp2_airflow_dag():
                 )
 
                 messages = response.get("Messages", [])
-                if not messages:
+                if not messages: # 10 seconds waited before checking again
                     logger.info("No visible messages at the moment. Waiting 10 seconds...")
                     time.sleep(10)
                     continue
 
-                delete_entries = []
+                delete_entries = [] # processing and deleting messages from queue
                 for msg in messages:
                     attrs = msg.get("MessageAttributes", {})
                     order_no = attrs.get("order_no", {}).get("StringValue")
@@ -115,7 +115,7 @@ def dp2_airflow_dag():
                         "ReceiptHandle": receipt_handle
                     })
 
-                if delete_entries:
+                if delete_entries: # deletes the messages from queue after loading
                     sqs.delete_message_batch(QueueUrl=queue_url, Entries=delete_entries)
                     logger.info(f"Deleted {len(delete_entries)} messages.")
 
@@ -130,11 +130,11 @@ def dp2_airflow_dag():
 
     @task
     def order_messages(collected: list):
-        """Sorts collected messages and returns the ordered phrase."""
+        # uses the order_no variable to order the chunks of the quote
         try:
-            normalized = []
+            normalized = [] 
             for order_no, word in collected:
-                try:
+                try: # multiple methods to ensure type casting is succesful to int
                     key = int(order_no)
                 except Exception:
                     try:
@@ -155,11 +155,11 @@ def dp2_airflow_dag():
 
     @task
     def submit_solution(phrase: str):
-        """Submits the final phrase to the submission SQS queue."""
+        # submission to sqs with computing ID and ordered quote
         try:
             response = sqs.send_message(
                 QueueUrl=SUBMISSION_URL,
-                MessageBody=f"Submission for {UVA_ID}",
+                MessageBody="Airflow DAG Submission: Teagan Britten",
                 MessageAttributes={
                     "uvaid": {"DataType": "String", "StringValue": UVA_ID},
                     "phrase": {"DataType": "String", "StringValue": phrase},
@@ -172,11 +172,11 @@ def dp2_airflow_dag():
             logger.error(f"Error submitting solution: {e}")
             return False
 
-    # --- Define Task Dependencies ---
+    # define task dependencies
     queue_url = populate_queue()
     collected = process_queue(queue_url)
     ordered_text = order_messages(collected)
     submit_solution(ordered_text)
 
-# Instantiate the DAG
-dag_instance = dp2_airflow_dag()
+# establish the DAG
+dp2_airflow_dag = dp2_dag()
